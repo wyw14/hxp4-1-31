@@ -7,6 +7,48 @@ interface HighScoreResponse {
   isNewRecord?: boolean;
 }
 
+type DataCategory = 'highScore' | 'leaderboard' | 'achievements' | 'settings' | 'history';
+
+interface LeaderboardEntry {
+  rank: number;
+  score: number;
+  date: string;
+}
+
+interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+  unlockedAt: string;
+}
+
+interface GameSettings {
+  soundEnabled: boolean;
+  difficulty: string;
+}
+
+interface HistoryEntry {
+  score: number;
+  date: string;
+  duration: number;
+}
+
+interface AllData {
+  highScore: number;
+  leaderboard: LeaderboardEntry[];
+  achievements: Achievement[];
+  settings: GameSettings;
+  history: HistoryEntry[];
+}
+
+const CATEGORY_LABELS: Record<DataCategory, string> = {
+  highScore: '最高分',
+  leaderboard: '排行榜',
+  achievements: '成就',
+  settings: '设置',
+  history: '历史战绩',
+};
+
 class ColorMemoryGame {
   private sequence: Color[] = [];
   private playerIndex: number = 0;
@@ -24,6 +66,9 @@ class ColorMemoryGame {
   private readonly lightOnDuration: number = 600;
   private readonly lightOffDuration: number = 300;
 
+  private pendingClearCategory: DataCategory | null = null;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
     this.buttons = document.querySelectorAll('.color-btn');
     this.startBtn = document.getElementById('start-btn') as HTMLButtonElement;
@@ -36,6 +81,7 @@ class ColorMemoryGame {
 
   private async init(): Promise<void> {
     this.setupEventListeners();
+    this.setupDataCenter();
     await this.fetchHighScore();
   }
 
@@ -48,6 +94,106 @@ class ColorMemoryGame {
         this.handlePlayerInput(color);
       });
     });
+  }
+
+  private setupDataCenter(): void {
+    const toggleBtn = document.getElementById('toggle-data-center') as HTMLButtonElement;
+    const dataCenter = document.getElementById('data-center') as HTMLElement;
+    const confirmModal = document.getElementById('confirm-modal') as HTMLElement;
+    const confirmCancel = document.getElementById('confirm-cancel') as HTMLButtonElement;
+    const confirmOk = document.getElementById('confirm-ok') as HTMLButtonElement;
+    const confirmMessage = document.getElementById('confirm-message') as HTMLElement;
+
+    toggleBtn.addEventListener('click', () => {
+      const isHidden = dataCenter.classList.contains('hidden');
+      if (isHidden) {
+        dataCenter.classList.remove('hidden');
+        this.loadAllData();
+      } else {
+        dataCenter.classList.add('hidden');
+      }
+    });
+
+    document.querySelectorAll('.clear-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const category = (e.target as HTMLButtonElement).dataset.category as DataCategory;
+        this.pendingClearCategory = category;
+        confirmMessage.textContent = `确定要清空「${CATEGORY_LABELS[category]}」数据吗？此操作不可恢复。`;
+        confirmModal.classList.remove('hidden');
+      });
+    });
+
+    confirmCancel.addEventListener('click', () => {
+      confirmModal.classList.add('hidden');
+      this.pendingClearCategory = null;
+    });
+
+    confirmOk.addEventListener('click', () => {
+      if (this.pendingClearCategory) {
+        this.clearCategory(this.pendingClearCategory);
+      }
+      confirmModal.classList.add('hidden');
+      this.pendingClearCategory = null;
+    });
+
+    confirmModal.addEventListener('click', (e) => {
+      if (e.target === confirmModal) {
+        confirmModal.classList.add('hidden');
+        this.pendingClearCategory = null;
+      }
+    });
+  }
+
+  private async loadAllData(): Promise<void> {
+    try {
+      const response = await fetch('/api/data');
+      const data = await response.json() as AllData;
+
+      this.setDataInfo('info-highScore', data.highScore === 0 ? '暂无记录' : `最高 ${data.highScore} 关`);
+      this.setDataInfo('info-leaderboard', data.leaderboard.length === 0 ? '暂无数据' : `${data.leaderboard.length} 条记录，最高 ${data.leaderboard[0]?.score ?? 0} 关`);
+      this.setDataInfo('info-achievements', data.achievements.length === 0 ? '暂无成就' : `已解锁 ${data.achievements.length} 个成就`);
+      this.setDataInfo('info-settings', `音效: ${data.settings.soundEnabled ? '开' : '关'} | 难度: ${data.settings.difficulty}`);
+      this.setDataInfo('info-history', data.history.length === 0 ? '暂无记录' : `${data.history.length} 条战绩记录`);
+    } catch (error) {
+      console.error('加载数据失败:', error);
+    }
+  }
+
+  private setDataInfo(elementId: string, text: string): void {
+    const el = document.getElementById(elementId);
+    if (el) el.textContent = text;
+  }
+
+  private async clearCategory(category: DataCategory): Promise<void> {
+    try {
+      const response = await fetch(`/api/data/${category}`, { method: 'DELETE' });
+      const result = await response.json() as { success?: boolean; message?: string };
+
+      if (result.success) {
+        this.showToast(`${CATEGORY_LABELS[category]} 数据已清空`);
+
+        if (category === 'highScore') {
+          this.highScore = 0;
+          this.highScoreEl.textContent = '0';
+        }
+
+        this.loadAllData();
+      }
+    } catch (error) {
+      console.error('清空数据失败:', error);
+      this.showToast('操作失败，请重试');
+    }
+  }
+
+  private showToast(message: string): void {
+    const toast = document.getElementById('toast') as HTMLElement;
+    toast.textContent = message;
+    toast.classList.remove('hidden');
+
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      toast.classList.add('hidden');
+    }, 2500);
   }
 
   private async fetchHighScore(): Promise<void> {
@@ -88,10 +234,10 @@ class ColorMemoryGame {
     this.level = 0;
     this.isPlaying = true;
     this.currentLevelEl.textContent = '0';
-    
+
     this.setButtonsDisabled(true);
     this.startBtn.disabled = true;
-    
+
     this.showStatus('游戏开始！', 'playing');
     this.nextRound();
   }
@@ -117,7 +263,7 @@ class ColorMemoryGame {
     for (let i = 0; i < this.sequence.length; i++) {
       const color = this.sequence[i];
       await this.lightUpButton(color);
-      
+
       if (i < this.sequence.length - 1) {
         await this.delay(this.lightOffDuration);
       }

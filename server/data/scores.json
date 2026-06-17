@@ -1,3 +1,10 @@
 {
-  "highScore": 0
+  "highScore": 0,
+  "leaderboard": [],
+  "achievements": [],
+  "settings": {
+    "soundEnabled": true,
+    "difficulty": "normal"
+  },
+  "history": []
 }
